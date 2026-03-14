@@ -1,0 +1,97 @@
+name: Build Android NDK and Release
+
+on:
+
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release version (example: v1.0.0)"
+        required: true
+        default: "v1.0.0"
+
+  # push tag 自动触发
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+
+      - name: Install Android NDK
+        run: |
+          echo "Downloading NDK r28c..."
+          wget https://dl.google.com/android/repository/android-ndk-r28c-linux.zip -q
+          unzip -q android-ndk-r28c-linux.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r28c" >> $GITHUB_ENV
+
+      - name: Build with ndk-build
+        run: |
+          $ANDROID_NDK_HOME/ndk-build -C . \
+          NDK_PROJECT_PATH=. \
+          APP_BUILD_SCRIPT=./jni/Android.mk
+
+      - name: Check build output
+        run: |
+          ls -lh libs/arm64-v8a/
+
+      - name: Package files
+        run: |
+
+          mkdir -p release
+
+          cp -v libs/arm64-v8a/* release/ || true
+          cp -v lib5.so release/ 2>/dev/null || true
+          cp -v lib5.so.primary release/ 2>/dev/null || true
+          cp -v kma_v*.kpm release/ 2>/dev/null || true
+
+          cd release
+          zip -r libscan-arm64-v8a.zip *
+          cd ..
+
+          echo "Release files:"
+          ls -lh release
+
+      # 上传 Actions 构建产物（即使不发 release 也能下载）
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libscan-arm64
+          path: release/libscan-arm64-v8a.zip
+
+      # 获取版本号
+      - name: Get tag name
+        id: tag
+        run: |
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      # 创建 GitHub Release
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.TAG }}
+          name: libscan ${{ steps.tag.outputs.TAG }}
+          files: release/libscan-arm64-v8a.zip
+          generate_release_notes: true
